@@ -9,15 +9,15 @@ fs = 44100
 
 # Define 5 base chords (triads) as MIDI intervals
 CHORDS = [
-    [60, 64, 67, 71, 74],   # C major
+    [69, 71, 76, 78, 82],    # A somthing
     [62, 65, 69, 86, 88],   # D minor
-    [65, 69, 72,  74, 81],   # F major
     [67, 70, 74, 76, 77],   # G7
-    [69, 71, 76, 78, 82]    # A somthing
+    [65, 69, 72,  74, 81],   # F major
+    [60, 64, 67, 71, 74],   # C major
 ]
 
 # Playback modes
-MODES = ['poly', 'arp', 'both']
+MODES = ['rev_arp', 'random', 'forward_arp', 'random']
 
 
 def midi_to_freq(midi):
@@ -38,30 +38,37 @@ def get_warmth_color(frame):
     r = np.mean(resized[:, :, 2])
     g = np.mean(resized[:, :, 1])
     b = np.mean(resized[:, :, 0])
-    warmth_ratio = (2 * r) / (2 * b + g + 1.0)  # Include green in both numerator and denominator
-    norm_warmth = remap(warmth_ratio, 0.3, 1.2, 0.0, 1.0)  # Normalized remap with adjusted range
+    warmth_ratio = (2 * r) / (2 * (b + g) + 1)  # Include green in both numerator and denominator
+    print("warmth ratio")
+    print(warmth_ratio)
+    norm_warmth = remap(warmth_ratio, 0.45, 0.55, 0.4, 5.9)  # Normalized remap with adjusted range
     return norm_warmth
 
+# def select_chord_by_color(warmth):
+#     index = min(int(warmth * len(CHORDS)), len(CHORDS) - 1)
+#     root_shift = int((warmth * 12) % 5)
+#     print([n + root_shift for n in CHORDS[index]])
+#     return [n + root_shift for n in CHORDS[index]]
 
 def select_chord_by_color(warmth):
-    index =  int(warmth * len(CHORDS)) % len(CHORDS)
+    index = np.floor(warmth).astype(int)
     print(index)
     return CHORDS[index]
 
 def play_chord(chord, mode, duration):
-    if mode == 'poly':
-        waves = [generate_sine(midi_to_freq(n), duration, 0.3) for n in chord]
+    if mode == 'rev_arp':
+        chordrev = reversed(chord)
+        waves = []
+        for i, n in enumerate(chordrev):
+            wave = generate_sine(midi_to_freq(n), duration, (duration/len(chord)))
+            delay = int(i * duration/len(chord) * fs)
+            wave = np.pad(wave, (delay, 0))[:int(fs * duration)]
+            waves.append(wave)
         buffer = sum(np.pad(w, (0, max(0, len(waves[0]) - len(w)))) for w in waves)
         sd.play(buffer / max(abs(buffer)), samplerate=fs)
         sd.wait()
 
-    elif mode == 'arp':
-        for n in chord:
-            wave = generate_sine(midi_to_freq(n), duration / 3, (duration/4))
-            sd.play(wave, samplerate=fs)
-            sd.wait()
-
-    elif mode == 'both':
+    elif mode == 'forward_arp':
         waves = []
         for i, n in enumerate(chord):
             wave = generate_sine(midi_to_freq(n), duration, (duration/len(chord)))
@@ -71,6 +78,19 @@ def play_chord(chord, mode, duration):
         buffer = sum(np.pad(w, (0, max(0, len(waves[0]) - len(w)))) for w in waves)
         sd.play(buffer / max(abs(buffer)), samplerate=fs)
         sd.wait()
+
+    elif mode == 'random':
+        random.shuffle(chord)
+        waves = []
+        for i, n in enumerate(chord):
+            wave = generate_sine(midi_to_freq(n), duration, (duration/len(chord)))
+            delay = int(i * duration/len(chord) * fs)
+            wave = np.pad(wave, (delay, 0))[:int(fs * duration)]
+            waves.append(wave)
+        buffer = sum(np.pad(w, (0, max(0, len(waves[0]) - len(w)))) for w in waves)
+        sd.play(buffer / max(abs(buffer)), samplerate=fs)
+        sd.wait()
+
 
 
 cap = cv2.VideoCapture(0)
@@ -83,7 +103,7 @@ while True:
 
     warmth = get_warmth_color(frame)
     chord = select_chord_by_color(warmth)
-    mode = 'both' #random.choice(MODES)
+    mode = random.choice(MODES)
     duration = 2.5
 
     print(f"Warmth: {warmth:.2f} | Mode: {mode} | Chord: {chord}")

@@ -1,93 +1,74 @@
-# multi_voice_pad.py
+# mode_switch_synth.py
 import cv2
 import numpy as np
 import sounddevice as sd
+import random
 import time
-import threading
 
 fs = 44100
-active_voices = []
-voice_lock = threading.Lock()
-log_file = open("param_log.txt", "w")
 
-# Generate smooth pad tone (with envelope)
-def generate_voice(freq, amp, duration, waveform='sine'):
-    t = np.linspace(0, duration, int(fs*duration), endpoint=False)
-    if waveform == 'sine':
-        wave = np.sin(2 * np.pi * freq * t)
-    elif waveform == 'triangle':
-        wave = 2 * np.abs(2 * (t * freq - np.floor(t * freq + 0.5))) - 1
-    elif waveform == 'noise':
-        wave = np.random.uniform(-1, 1, t.shape)
-    else:
-        wave = np.zeros_like(t)
+# Define modes as semitone intervals from root
+MODES = {
+    'ionian':     [0, 2, 4, 5, 7, 9, 11],
+    'dorian':     [0, 2, 3, 5, 7, 9, 10],
+    'phrygian':   [0, 1, 3, 5, 7, 8, 10],
+    'lydian':     [0, 2, 4, 6, 7, 9, 11],
+    'mixolydian': [0, 2, 4, 5, 7, 9, 10],
+    'aeolian':    [0, 2, 3, 5, 7, 8, 10],
+    'locrian':    [0, 1, 3, 5, 6, 8, 10]
+}
+mode_names = list(MODES.keys())
 
-    # Simple attack-release envelope
-    env = np.ones_like(t)
-    attack_len = int(0.1 * fs)
-    release_len = int(0.2 * fs)
-    env[:attack_len] = np.linspace(0, 1, attack_len)
-    env[-release_len:] = np.linspace(1, 0, release_len)
+# Base MIDI note (C4)
+BASE_MIDI = 60
 
-    return (amp * wave * env).astype(np.float32)
+def midi_to_freq(midi):
+    return 440.0 * 2 ** ((midi - 69) / 12)
 
-def audio_thread():
-    while True:
-        with voice_lock:
-            if active_voices:
-                # Find the max length among all voices
-                max_len = max(len(v) for v in active_voices)
-                padded = [np.pad(v, (0, max_len - len(v))) for v in active_voices]
-                buffer = np.sum(padded, axis=0)
-                active_voices.clear()
-                sd.play(buffer, fs)
-                sd.wait()
-        time.sleep(0.05)
-
-threading.Thread(target=audio_thread, daemon=True).start()
+def generate_sine(freq, duration, amp):
+    t = np.linspace(0, duration, int(fs * duration), endpoint=False)
+    wave = amp * np.sin(2 * np.pi * freq * t)
+    return wave.astype(np.float32)
 
 cap = cv2.VideoCapture(0)
-print("[INFO] Press ESC to quit")
+if not cap.isOpened():
+    print("[ERROR] Webcam not found")
+    exit()
+
+print("[INFO] Playing random notes. Press ESC to stop.")
 
 while True:
     ret, frame = cap.read()
     if not ret:
         continue
 
-    frame_small = cv2.resize(frame, (160, 120))
-    gray = cv2.cvtColor(frame_small, cv2.COLOR_BGR2GRAY)
+    # Extract warmth
+    small = cv2.resize(frame, (160, 120))
+    r_mean = np.mean(small[:, :, 2])
+    b_mean = np.mean(small[:, :, 0])
+    warmth = r_mean / (b_mean + 1.0)
+    norm_warmth = min(warmth / 3.0, 1.0)
 
-    # Feature extraction
-    brightness = np.mean(gray) / 255.0
-    warmth = np.mean(frame_small[:,:,2]) / (np.mean(frame_small[:,:,0]) + 1)
-    warmth = min(warmth / 3.0, 1.0)
-    edges = cv2.Canny(gray, 50, 150)
-    openness = np.count_nonzero(edges) / edges.size
-    lap = cv2.Laplacian(gray, cv2.CV_32F)
-    texture = min(np.std(lap) / 100.0, 1.0)
+    # Choose mode based on warmth
+    mode_index = int(norm_warmth * len(mode_names)) % len(mode_names)
+    mode = MODES[mode_names[mode_index]]
 
-    # Map to synth params
-    base_pitch = 220 + 100 * texture
-    velocity = 0.3 + 0.5 * warmth
-    duration = 0.5 + 1.0 * (1 - brightness)
-    waveform = 'sine' if warmth > 0.6 else ('noise' if texture > 0.6 else 'triangle')
+    # Random note from current mode
+    root_midi = BASE_MIDI + 12 * random.randint(0, 1)  # C4 or C5
+    interval = random.choice(mode)
+    note_midi = root_midi + interval
+    freq = midi_to_freq(note_midi)
 
-    # Polyphony: play a triad
-    intervals = [1.0, 5/4, 3/2]  # root, major third, fifth
-    with voice_lock:
-        for i in intervals:
-            v = generate_voice(base_pitch * i, velocity, duration, waveform)
-            active_voices.append(v)
+    # Generate and play
+    print(f"[MODE: {mode_names[mode_index]}] Note MIDI: {note_midi}, Freq: {freq:.2f} Hz")
+    tone = generate_sine(freq, 0.8, 0.4)
+    sd.play(tone, samplerate=fs)
+    sd.wait()
 
-    # Logging
-    log_file.write(f"time={time.time():.2f}, pitch={base_pitch:.2f}, vel={velocity:.2f}, dur={duration:.2f}, wave={waveform}\n")
-    log_file.flush()
-
-    # Show webcam
-    cv2.imshow("Live Visuals", frame)
+    # Show camera
+    cv2.imshow("Camera", frame)
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
 cap.release()
 cv2.destroyAllWindows()
-log_file.close()

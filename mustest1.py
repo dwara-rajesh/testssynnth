@@ -8,6 +8,9 @@ import time
 fs = 44100
 
 # Define modes as semitone intervals from root
+MODE_ORDER = [
+    'locrian', 'phrygian', 'aeolian', 'lydian', 'dorian', 'mixolydian', 'ionian'
+]
 MODES = {
     'ionian':     [0, 2, 4, 5, 7, 9, 11],
     'dorian':     [0, 2, 3, 5, 7, 9, 10],
@@ -17,25 +20,30 @@ MODES = {
     'aeolian':    [0, 2, 3, 5, 7, 8, 10],
     'locrian':    [0, 1, 3, 5, 6, 8, 10]
 }
-mode_names = list(MODES.keys())
 
-# Base MIDI note (C4)
 BASE_MIDI = 60
+pattern = []
+pattern_index = 0
+pattern_root = BASE_MIDI
+notes_played = 0
+
 
 def midi_to_freq(midi):
     return 440.0 * 2 ** ((midi - 69) / 12)
+
 
 def generate_sine(freq, duration, amp):
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
     wave = amp * np.sin(2 * np.pi * freq * t)
     return wave.astype(np.float32)
 
+
 cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("[ERROR] Webcam not found")
     exit()
 
-print("[INFO] Playing random notes. Press ESC to stop.")
+print("[INFO] Playing structured random notes. Press ESC to stop.")
 
 while True:
     ret, frame = cap.read()
@@ -50,20 +58,33 @@ while True:
     norm_warmth = min(warmth / 3.0, 1.0)
 
     # Choose mode based on warmth
-    mode_index = int(norm_warmth * len(mode_names)) % len(mode_names)
-    mode = MODES[mode_names[mode_index]]
+    mode_index = int(norm_warmth * len(MODE_ORDER)) % len(MODE_ORDER)
+    mode_name = MODE_ORDER[mode_index]
+    mode = MODES[mode_name]
 
-    # Random note from current mode
-    root_midi = BASE_MIDI + 12 * random.randint(0, 1)  # C4 or C5
-    interval = random.choice(mode)
-    note_midi = root_midi + interval
+    # Generate new pattern every 4 notes
+    if notes_played % 4 == 0:
+        pattern_root = BASE_MIDI + 12 * random.randint(0, 1)
+        pattern = [random.choice(mode) for _ in range(4)]
+        pattern_index = 0
+
+    # Select interval from pattern and create transposed note
+    pattern_offset = (notes_played // 4) % 4 * 2  # Shift every 4 notes
+    note_midi = pattern_root + pattern[pattern_index] + pattern_offset
+    pattern_index = (pattern_index + 1) % 4
+
+    # Duration variation
+    duration_beats = random.randint(1, 4)
+    duration_sec = 0.5 * duration_beats
+
     freq = midi_to_freq(note_midi)
+    print(f"[MODE: {mode_name}] Note MIDI: {note_midi}, Freq: {freq:.2f} Hz, Duration: {duration_sec:.1f}s")
 
-    # Generate and play
-    print(f"[MODE: {mode_names[mode_index]}] Note MIDI: {note_midi}, Freq: {freq:.2f} Hz")
-    tone = generate_sine(freq, 0.8, 0.4)
+    tone = generate_sine(freq, duration_sec, 0.4)
     sd.play(tone, samplerate=fs)
     sd.wait()
+
+    notes_played += 1
 
     # Show camera
     cv2.imshow("Camera", frame)

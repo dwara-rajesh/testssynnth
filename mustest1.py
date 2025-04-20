@@ -24,7 +24,7 @@ CHORDS = [
 # Playback modes
 MODES = ['rev_arp', 'random', 'forward_arp', 'random']
 
-WAVEFORMS = ['sine', 'square', 'triangle', 'noise']
+WAVEFORMS = ['sine', 'square', 'triangle']
 
 def midi_to_freq(midi):
     return 440.0 * 2 ** ((midi - 69) / 12)
@@ -37,8 +37,6 @@ def generate_wave(freq, duration, amp, kind):
         wave = amp * np.sign(np.sin(2 * np.pi * freq * t))
     elif kind == 'triangle':
         wave = amp * 2 * np.abs(2 * ((t * freq) % 1) - 1) - 1
-    elif kind == 'noise':
-        wave = amp * np.random.uniform(-1, 1, size=t.shape)
     else:
         wave = np.zeros_like(t)
     return wave.astype(np.float32)
@@ -70,12 +68,10 @@ def select_chord_by_color(warmth):
 def select_waveform(texture):
     if texture < 0.04:
         return 'sine'
-    elif texture < 0.054:
+    elif texture < 0.059:
         return 'triangle'
-    elif texture < 0.62:
-        return 'square'
     else:
-        return 'noise'
+        return 'square'
 
 def play_chord(chord, mode, duration, waveform):
     if mode == 'rev_arp':
@@ -87,8 +83,9 @@ def play_chord(chord, mode, duration, waveform):
             wave = np.pad(wave, (delay, 0))[:int(fs * duration)]
             waves.append(wave)
         buffer = sum(np.pad(w, (0, max(0, len(waves[0]) - len(w)))) for w in waves)
-        sd.play(buffer / max(abs(buffer)), samplerate=fs)
-        sd.wait()
+        fade = np.linspace(1, 0, int(0.1 * fs))
+        buffer[-len(fade):] *= fade
+        sd.play(buffer / max(abs(buffer)), samplerate=fs, blocking=False)  # smoother release
 
     elif mode == 'forward_arp':
         waves = []
@@ -127,13 +124,11 @@ while True:
     waveform = select_waveform(texture)
 
     if brightness >= 0.75:
-        duration = 1.0
-    elif brightness >= 0.5:
-        duration = 1.5
-    elif brightness >= 0.25:
-        duration = 2.0
-    else:
+        duration = 1.25
+    elif brightness >= 0.45:
         duration = 2.5
+    else:
+        duration = 5
 
     print(f"Warmth: {warmth:.2f} | Brightness: {brightness:.2f} | Texture: {texture:.3f} | Mode: {mode} | Wave: {waveform} | Chord: {chord}")
     play_chord(chord, mode, duration, waveform)

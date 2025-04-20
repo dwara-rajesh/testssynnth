@@ -10,20 +10,22 @@ fs = 44100
 
 # 10 base chords
 CHORDS = [
-    [69, 72, 76, 79, 70, 75],  # A dark: Am7(b5,b9)
-    [61, 64, 67, 68, 60, 63],  # B dim: fully diminished
-    [62, 65, 69, 74, 76, 71],  # Dm: Dm9
-    [63, 66, 70, 73, 75, 68],  # Ebm: Ebm9(b9)
-    [67, 71, 74, 79, 69, 72],  # G7: G9
-    [64, 68, 71, 75, 73, 78],  # Emaj: Emaj9
-    [65, 69, 72, 76, 79, 62],  # Fmaj: Fmaj9
-    [66, 70, 73, 77, 81, 71],  # F#maj9
-    [60, 64, 67, 71, 62, 69],  # Cmaj9
-    [59, 63, 66, 70, 61, 68]   # Bmaj9
+    # Dark (minor7 chords)
+    [69, 72, 76, 79, 69+12, 76+12],  # A m7: A, C, E, G, A', E'
+    [62, 65, 69, 72, 62+12, 69+12],  # D m7: D, F, A, C, D', A'
+    [63, 66, 70, 73, 63+12, 70+12],  # Eb m7: Eb, Gb, Bb, Db, Eb', Bb'
+    [65, 68, 72, 75, 65+12, 72+12],  # F m7: F, Ab, C, Eb, F', C'
+    [67, 70, 74, 77, 67+12, 74+12],  # G m7: G, Bb, D, F, G', D'
+    # Happy (major7 chords)
+    [60, 64, 67, 71, 60+12, 67+12],  # C maj7: C, E, G, B, C', G'
+    [62, 66, 69, 73, 62+12, 69+12],  # D maj7: D, F#, A, C#, D', A'
+    [64, 68, 71, 75, 64+12, 71+12],  # E maj7: E, G#, B, D#, E', B'
+    [65, 69, 72, 76, 65+12, 72+12],  # F maj7: F, A, C, E, F', C'
+    [67, 71, 74, 78, 67+12, 74+12]   # G maj7: G, B, D, F#, G', D'
 ]
 MODES = ['rev_arp', 'random', 'forward_arp']
 
-duration = 4.0  # full bar duration
+duration = 3  # full bar duration
 sub = duration / 6.0  # subdivision for 6-note arpeggio
 
 # Shared state

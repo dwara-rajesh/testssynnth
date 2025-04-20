@@ -26,7 +26,7 @@ MODES = ['rev_arp', 'random', 'forward_arp']
 duration = 4.0  # full bar (3/4 time)
 sub = duration / 6.0  # 6-note arp
 
-dly = int(0.075 * fs)  # reverb delay in samples
+dly = int(0.1 * fs)  # reverb delay in samples
 
 # Shared state
 global_seq = []
@@ -110,14 +110,29 @@ def waveform_updater():
             global_texture = texture
         time.sleep(sub)
 
-# Reverb updater thread (placeholder)
+# Reverb updater thread: adjusts reverb based on object crowding (fewer objects → more reverb)
 def reverb_updater():
     global global_reverb
     while running:
-        # In future, update global_reverb here
+        # grab a frame for analysis
+        ret, frame = cap.read()
+        if not ret:
+            time.sleep(0.1)
+            continue
+        small = cv2.resize(frame, (160,120))
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        # simple bina ry segmentation to count contours
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        obj_count = len(contours)
+        # map object count to reverb: fewer→more, more→less
+        # assume counts in [0,50]
+        rv = remap(obj_count, 0, 50, 0.9, 0.1)
+        rv = max(0.0, min(rv, 1.0))
+        global_reverb = rv*0.95
+        print(f"[REVERB] objects={obj_count}, reverb_mix={global_reverb:.2f}")
         time.sleep(1)
 
-# Player thread with continuous reverb
 def player():
     global global_reverb_tail
     idx = 0

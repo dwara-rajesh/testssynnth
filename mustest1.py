@@ -38,7 +38,7 @@ MODES = ['rev_arp', 'random', 'forward_arp']
 midi_to_freq = lambda m: 440.0 * 2 ** ((m - 69) / 12)
 remap = lambda v,a,b,c,d: (v-a)/(b-a)*(d-c)+c
 # Total bar duration (3/4): 6 subdivisions (6 notes)
-duration = 3
+duration = 4
 
 # Wave generator
 def generate_wave(freq, length, amp, kind):
@@ -102,7 +102,7 @@ while True:
         freq = midi_to_freq(note)
         wave = generate_wave(freq, sub, sub, waveform)
         # Release-only envelope based on texture
-        rel_len = int((1 - texture**1.1) * len(wave))
+        rel_len = int((1 - texture) * len(wave))
         if rel_len > 0:
             env = np.ones_like(wave)
             env[-rel_len:] = np.linspace(1, 0, rel_len)

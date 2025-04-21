@@ -11,22 +11,24 @@ fs = 44100
 
 # 10 base chords: mix of suspended and seventh voicings
 CHORDS = [
-    [69, 76, 79, 69+12, 76+12, 79+12],  # A sus2
-    [62, 65, 69, 72, 62+12, 69+12],      # D minor7
-    [63, 68, 70, 63+12, 68+12, 70+12],   # Eb sus4
-    [65, 72, 75, 65+12, 72+12, 75+12],    # F minor7
-    [67, 69, 74, 67+12, 69+12, 74+12],    # G sus2
+    # Dark: only 'sus' with tritone (b5) or minor7
+    [69, 75, 79, 69+12, 75+12, 79+12],  # A7b5 (A, D#, G)
+    [62, 65, 69, 72, 62+12, 69+12],      # D minor7 (Dm7)
+    [63, 69, 73, 63+12, 69+12, 73+12],   # Eb7b5 (Eb, B, Db)
+    [65, 72, 75, 65+12, 72+12, 75+12],    # F minor7 (Fm7)
+    [67, 74, 77, 67+12, 74+12, 77+12],    # G7b5 (G, Db, F)
+    # Bright: major7 and sus2
     [60, 64, 67, 71, 60+12, 67+12],      # C major7
     [62, 66, 69, 62+12, 66+12, 69+12],    # D sus4
     [64, 68, 71, 75, 64+12, 71+12],      # E major7
     [65, 67, 72, 65+12, 67+12, 72+12],    # F sus2
     [67, 71, 74, 78, 67+12, 74+12]       # G major7
-]
+]  # A sus2
 MODES = ['rev_arp', 'random', 'forward_arp']
 
 duration = 4.0  # full bar (3/4 time)
 sub = duration / 6.0  # subdivision for 6-note arp
-dly = int(sub * fs * 0.1)  # reverb delay
+dly = int(sub * fs * 0.75)  # reverb delay
 
 # Shared state
 global_seq = []
@@ -94,9 +96,22 @@ def feature_updater():
         warmth = remap((2*r)/(2*(b+g)+1), 0.45,0.55,0,len(CHORDS)-0.001)
         edges = cv2.Canny(gray, 50,150)
         texture = np.count_nonzero(edges)/edges.size
-        _, thresh = cv2.threshold(gray,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-        contours,_ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # more sensitive object segmentation:
+        thresh = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            11, 2
+        )
+        kernel = np.ones((3,3), np.uint8)
+        clean = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+        contours, _ = cv2.findContours(
+            clean,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
         obj_count = len(contours)
+
         with feat_lock:
             global_brightness = brightness
             global_warmth = warmth
@@ -142,7 +157,7 @@ def reverb_updater():
         ratio = min(obj_count/25,1.0)
         sens = ratio**2
         rv = remap(sens,0,1,0.9,0.1)
-        global_reverb = max(0.0,min(rv,1.0))*0.95
+        global_reverb = max(0.0,min(rv,1.0))
         time.sleep(1)
 
 # Player: schedules note buffers into audio_queue

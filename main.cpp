@@ -15,6 +15,7 @@
 #endif
 #include <random>
 #include <chrono>
+#include <algorithm>
 #include <iostream>
 
 using namespace std::chrono;
@@ -46,19 +47,21 @@ cv::VideoCapture cap(0);
 
 // Helpers
 static double midiToFreq(int m) { return 440.0 * std::pow(2.0, (m - 69) / 12.0); }
-static double remap(double v,double a,double b,double c,double d) { return (v-a)/(b-a)*(d-c)+c; }
+static double remap(double v,double a,double b,double c,double d) { return (v - a)/(b - a)*(d - c) + c; }
 
 // Waveform generator
 static std::vector<SAMPLE> generateWave(double freq,int len,double amp,int kind) {
     std::vector<SAMPLE> out(len);
     for(int i=0;i<len;i++){
-        double t = double(i)/FS;
-        double v=0;
-        if(kind==0) v = std::sin(2*M_PI*freq*t);
-        else if(kind==1) {
-            double x = 2*(t*freq - std::floor(t*freq+0.5));
-            v = (1 - 2*std::fabs(x));
-        } else if(kind==2) v = (std::sin(2*M_PI*freq*t)>=0?1.0:-1.0);
+        double t = double(i) / FS;
+        double v = 0;
+        if(kind == 0) v = std::sin(2 * M_PI * freq * t);
+        else if(kind == 1) {
+            double x = 2 * (t * freq - std::floor(t * freq + 0.5));
+            v = (1 - 2 * std::fabs(x));
+        } else if(kind == 2) {
+            v = (std::sin(2 * M_PI * freq * t) >= 0 ? 1.0 : -1.0);
+        }
         out[i] = amp * v;
     }
     return out;
@@ -68,15 +71,15 @@ static std::vector<SAMPLE> generateWave(double freq,int len,double amp,int kind)
 static int paCallback(const void*, void* out,
     unsigned long frames, const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void*) {
     SAMPLE* buf = (SAMPLE*)out;
-    std::fill(buf, buf+frames, 0.0f);
-    unsigned long idx=0;
+    std::fill(buf, buf + frames, 0.0f);
+    unsigned long idx = 0;
     std::lock_guard<std::mutex> lock(shared.seqMutex);
-    while(idx<frames && !shared.audioQueue.empty()){
+    while(idx < frames && !shared.audioQueue.empty()){
         auto& chunk = shared.audioQueue.front();
-        unsigned long n = std::min<unsigned long>(chunk.size(), frames-idx);
-        for(unsigned long i=0;i<n;i++) buf[idx+i] += chunk[i];
-        if(n<chunk.size()){
-            chunk.erase(chunk.begin(), chunk.begin()+n);
+        unsigned long n = std::min<unsigned long>(chunk.size(), frames - idx);
+        for(unsigned long i = 0; i < n; i++) buf[idx + i] += chunk[i];
+        if(n < chunk.size()) {
+            chunk.erase(chunk.begin(), chunk.begin() + n);
         } else {
             shared.audioQueue.pop_front();
         }
@@ -86,21 +89,21 @@ static int paCallback(const void*, void* out,
 }
 
 // Feature thread
-void featureThread(){
-    while(shared.running){
+void featureThread() {
+    while(shared.running) {
         cv::Mat frame, small, gray;
-        if(!cap.read(frame)){ std::this_thread::sleep_for(milliseconds(50)); continue; }
-        cv::resize(frame, small, {160,120});
+        if(!cap.read(frame)) { std::this_thread::sleep_for(milliseconds(50)); continue; }
+        cv::resize(frame, small, {160, 120});
         cv::cvtColor(small, gray, cv::COLOR_BGR2GRAY);
-        float bright = cv::mean(gray)[0]/255.0f;
-        auto mc = cv::mean(small); float r=mc[2], g=mc[1], b=mc[0];
-        float w = remap((2*r)/(2*(b+g)+1),0.45,0.55,0, shared.CHORDS.size()-0.001);
-        cv::Mat edges; cv::Canny(gray, edges,50,150);
-        float tex = float(cv::countNonZero(edges)) / (160*120);
+        float bright = cv::mean(gray)[0] / 255.0f;
+        auto mc = cv::mean(small); float r = mc[2], g = mc[1], b = mc[0];
+        float w = remap((2 * r) / (2 * (b + g) + 1), 0.45, 0.55, 0, shared.CHORDS.size() - 0.001);
+        cv::Mat edges; cv::Canny(gray, edges, 50, 150);
+        float tex = float(cv::countNonZero(edges)) / (160 * 120);
         cv::Mat thresh;
-        cv::adaptiveThreshold(gray, thresh,255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv::THRESH_BINARY_INV,11,2);
-        cv::morphologyEx(thresh, thresh, cv::MORPH_OPEN, cv::Mat::ones(3,3,CV_8U));
+        cv::adaptiveThreshold(gray, thresh, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv::THRESH_BINARY_INV, 11, 2);
+        cv::morphologyEx(thresh, thresh, cv::MORPH_OPEN, cv::Mat::ones(3, 3, CV_8U));
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(thresh, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
         shared.brightness = bright;
@@ -112,83 +115,101 @@ void featureThread(){
 }
 
 // Chord thread
-void chordThread(){
-    std::uniform_int_distribution<int> md(0,2);
-    while(shared.running){
-        double w = shared.warmth, b = shared.brightness;
-        int idx = std::min<int>(int(std::floor(w)), shared.CHORDS.size()-1);
+void chordThread() {
+    std::uniform_int_distribution<int> md(0, 2);
+    while(shared.running) {
+        double w = shared.warmth;
+        double b = shared.brightness;
+        int idx = std::min<int>(int(std::floor(w)), shared.CHORDS.size() - 1);
         auto chord = shared.CHORDS[idx];
         int m = md(rng);
-        if(m==0) std::reverse(chord.begin(), chord.end());
-        else if(m==1) std::shuffle(chord.begin(), chord.end(), rng);
-        int offs = int(remap(b,0,1,-4,3))*12;
+        if(m == 0) std::reverse(chord.begin(), chord.end());
+        else if(m == 1) std::shuffle(chord.begin(), chord.end(), rng);
+        int offs = int(remap(b, 0, 1, -4, 4)) * 12;
         std::vector<int> seq;
-        for(int n:chord) seq.push_back(n+offs);
+        for(int n : chord) seq.push_back(n + offs);
         seq.push_back(seq[0]);
         { std::lock_guard<std::mutex> lock(shared.seqMutex); shared.seq = seq; }
-        std::this_thread::sleep_for(duration_cast<milliseconds>(milliseconds(int(DURATION*1000))));
+        std::this_thread::sleep_for(milliseconds(int(DURATION * 1000)));
     }
 }
 
 // Waveform thread
-void waveThread(){
-    while(shared.running){
+void waveThread() {
+    while(shared.running) {
         float tex = shared.texture;
-        shared.waveform = (tex<0.06f?0:(tex<0.12f?1:2));
-        std::this_thread::sleep_for(duration_cast<milliseconds>(milliseconds(int(SUB*1000))));
+        shared.waveform = (tex < 0.05f ? 0 : (tex < 0.10f ? 1 : 2));
+        std::this_thread::sleep_for(milliseconds(int(SUB * 1000)));
     }
 }
 
 // Reverb thread
-void revThread(){
-    while(shared.running){
-        double r = std::min(shared.objCount/25.0,1.0);
-        double s = r*r;
-        shared.reverb = std::max(0.0, std::min(remap(s,0,1,0.9,0.1),1.0));
+void revThread() {
+    while(shared.running) {
+        double ratio = std::min(shared.objCount / 25.0, 1.0);
+        double sens = ratio * ratio;
+        double rv = remap(sens, 0, 1, 0.9, 0.1) * 0.95;  // damping
+        shared.reverb = std::clamp<float>(rv, 0.0f, 1.0f);
         std::this_thread::sleep_for(seconds(1));
     }
 }
 
 // Player thread
-void playerThread(){
-    int idx=0;
-    while(shared.running){
+void playerThread() {
+    int idx = 0;
+    while(shared.running) {
         std::vector<int> seq;
         { std::lock_guard<std::mutex> lock(shared.seqMutex); seq = shared.seq; }
         int wf = shared.waveform;
         double tex = shared.texture;
         double vol = shared.volume;
         double rev = shared.reverb;
-        if(!seq.empty()){
+        if(!seq.empty()) {
             int note = seq[idx % seq.size()];
             double freq = midiToFreq(note);
             auto dry = generateWave(freq, SUB_FRAMES, SUB, wf);
-            int atk = int(0.005*FS);
-            for(int i=0;i<atk && i<dry.size();i++) dry[i] *= i/(double)atk;
-            int rel = int((1-tex*tex)*dry.size());
-            for(int i=0;i<rel;i++) dry[dry.size()-1-i] *= (rel-i)/(double)rel;
+            // apply volume
+            for(auto &s : dry) s *= vol;
+            // attack
+            int atk = int(0.005 * FS);
+            for(int i = 0; i < atk && i < (int)dry.size(); i++) dry[i] *= i / double(atk);
+            // release
+            int rel = int((1 - tex * tex) * dry.size());
+            for(int i = 0; i < rel; i++) dry[dry.size()-1 - i] *= (rel - i) / double(rel);
+
+            // reverb mixing
             std::vector<SAMPLE> out(dry.size());
-            for(int i=0;i<dry.size();i++) out[i] = dry[i]*(1-rev);
-            for(int i=0;i+ DLY<out.size();i++) out[i+DLY] += dry[i]*rev;
+            for(size_t i = 0; i < dry.size(); i++) {
+                float wet = (i < DLY ? shared.reverbTail[i] : 0.0f);
+                out[i] = dry[i] * (1.0 - rev) + wet;
+            }
+            for(size_t i = 0; i + DLY < out.size(); i++) {
+                out[i + DLY] += dry[i] * rev;
+            }
+            // normalize chunk
+            float maxv = 0;
+            for(auto s : out) maxv = std::max(maxv, std::fabs(s));
+            if(maxv > 0) for(auto &s : out) s /= maxv;
+            shared.reverbTail.assign(out.end() - DLY, out.end());
+
             std::lock_guard<std::mutex> lock(shared.seqMutex);
-            shared.audioQueue.push_back(out);
+            shared.audioQueue.push_back(std::move(out));
             idx++;
         }
-        std::this_thread::sleep_for(duration_cast<milliseconds>(milliseconds(int(SUB*1000))));
+        std::this_thread::sleep_for(milliseconds(int(SUB * 1000)));
     }
 }
 
-int main(){
-    // initialize chords
+int main() {
     shared.CHORDS = {
-        {69,75,79,69+12,75+12,79+12}, {62,65,69,72,62+12,69+12},
-        {63,69,73,63+12,69+12,73+12}, {65,72,75,65+12,72+12,75+12},
-        {67,74,77,67+12,74+12,77+12}, {60,64,67,71,60+12,67+12},
-        {62,66,69,62+12,66+12,69+12}, {64,68,71,75,64+12,71+12},
-        {65,67,72,65+12,67+12,72+12}, {67,71,74,78,67+12,74+12}
+        {69,75,79,81,87,91}, {62,65,69,72,74,81},
+        {63,69,73,75,81,85}, {65,72,75,77,84, ninety one},
+        {67,74,77,79,86,90}, {60,64,67,71,72,79},
+        {62,66,69,71,78,82}, {64,68,71,73,80,84},
+        {65,67,72,74,79,83}, {67,71,74,76,83,87}
     };
     shared.running = true;
-    shared.reverbTail.assign(DLY,0);
+    shared.reverbTail.assign(DLY, 0);
 
     Pa_Initialize();
     Pa_OpenDefaultStream(&paStream, 0, 1, paFloat32, FS, SUB_FRAMES,
@@ -198,10 +219,15 @@ int main(){
     std::thread t1(featureThread), t2(chordThread), t3(waveThread), t4(revThread), t5(playerThread);
 
     cv::namedWindow("Cam");
-    while(shared.running){ cv::Mat f; if(!cap.read(f)) break; cv::imshow("Cam",f);
-        if(cv::waitKey(1)==27) shared.running=false; }
+    while(shared.running) {
+        cv::Mat f;
+        if(!cap.read(f)) break;
+        cv::imshow("Cam", f);
+        if(cv::waitKey(1) == 27) shared.running = false;
+    }
 
     t1.join(); t2.join(); t3.join(); t4.join(); t5.join();
     Pa_StopStream(paStream); Pa_CloseStream(paStream); Pa_Terminate();
-    cap.release(); return 0;
+    cap.release();
+    return 0;
 }

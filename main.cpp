@@ -55,12 +55,20 @@ static std::vector<SAMPLE> generateWave(double freq,int len,double amp,int kind)
     std::vector<SAMPLE> out(len);
     for(int i=0;i<len;i++){
         double t = double(i) / FS;
+        double phase = 2.0 * 3.14159265358979323846 * freq * t;
         double v = 0;
-        if(kind == 0) v = std::sin(2 * 3.14159265358979323846 * freq * t);
+        if(kind == 0) v = std::sin(phase);
         else if(kind == 1) {
             double x = 2 * (t * freq - std::floor(t * freq + 0.5));
             v = (1 - 2 * std::fabs(x));
         } else if(kind == 2) {
+            v = (std::sin(phase) >= 0 ? 1.0 : -1.0);
+        }
+        out[i] = amp * v;
+    }
+    out[0] = 0.0f;  // force zero-crossing at start to prevent clicks
+    return out;
+} else if(kind == 2) {
             v = (std::sin(2 * 3.14159265358979323846 * freq * t) >= 0 ? 1.0 : -1.0);
         }
         out[i] = amp * v;
@@ -172,7 +180,14 @@ void playerThread() {
             float maxv = 0;
             for(auto s : out) maxv = std::max(maxv, std::fabs(s));
             if(maxv > 0) for(auto &s : out) s /= maxv;
-            shared.reverbTail.assign(out.end() - DLY, out.end());
+            int fadeLen = std::min<int>(220, out.size());  // ~10 ms at 22 kHz
+            for (int i = 0; i < fadeLen; ++i) {
+                float fadeIn = i / float(fadeLen);
+                out[i] *= fadeIn;
+                if (i < shared.reverbTail.size())
+                    out[i] += shared.reverbTail[i] * (1.0f - fadeIn);
+            }
+            shared.reverbTail.assign(out.end() - fadeLen, out.end());
             std::lock_guard<std::mutex> lock(shared.seqMutex);
             if (shared.audioQueue.size() > 10) shared.audioQueue.pop_front();
             shared.audioQueue.push_back(std::move(out));

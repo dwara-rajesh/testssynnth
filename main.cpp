@@ -24,7 +24,8 @@ static constexpr double SUB = DURATION / 6.0;
 static constexpr int SUB_FRAMES = int(SUB * FS);
 static constexpr int DLY = int(SUB * FS * 0.75);
 
-// Frequency lookup table\ nstd::array<double, 128> freqLUT;
+// Frequency lookup table
+static std::array<double, 128> freqLUT;
 static void initFreqLUT() {
     for (int i = 0; i < 128; ++i)
         freqLUT[i] = 440.0 * std::pow(2.0, (i - 69) / 12.0);
@@ -48,12 +49,12 @@ std::mt19937 rng(std::random_device{}());
 PaStream* paStream = nullptr;
 cv::VideoCapture cap(0);
 
-static double remap(double v,double a,double b,double c,double d) { return (v - a)/(b - a)*(d - c) + c; }
+static double remap(double v, double a, double b, double c, double d) { return (v - a) / (b - a) * (d - c) + c; }
 
 // Waveform generator with zero-cross start
-static std::vector<SAMPLE> generateWave(double freq,int len,double amp,int kind) {
+static std::vector<SAMPLE> generateWave(double freq, int len, double amp, int kind) {
     std::vector<SAMPLE> out(len);
-    for(int i = 0; i < len; ++i) {
+    for (int i = 0; i < len; ++i) {
         double t = double(i) / FS;
         double phase = 2.0 * 3.14159265358979323846 * freq * t;
         double v = 0.0;
@@ -77,10 +78,10 @@ static int paCallback(const void*, void* out,
     std::fill(buf, buf + frames, 0.0f);
     unsigned long idx = 0;
     std::lock_guard<std::mutex> lock(shared.seqMutex);
-    while(idx < frames && !shared.audioQueue.empty()) {
+    while (idx < frames && !shared.audioQueue.empty()) {
         auto& chunk = shared.audioQueue.front();
         unsigned long n = std::min<unsigned long>(chunk.size(), frames - idx);
-        for(unsigned long i = 0; i < n; ++i) buf[idx + i] += chunk[i];
+        for (unsigned long i = 0; i < n; ++i) buf[idx + i] += chunk[i];
         if (n < chunk.size()) chunk.erase(chunk.begin(), chunk.begin() + n);
         else shared.audioQueue.pop_front();
         idx += n;
@@ -157,7 +158,7 @@ void playerThread() {
             double freq = freqLUT[note];
             auto dry = generateWave(freq, SUB_FRAMES, SUB, wf);
             for (auto &s : dry) s *= vol;
-            int atk = int(0.005 * FS);
+            int atk = int(0.05 * FS);
             for (int i = 0; i < atk && i < (int)dry.size(); ++i) dry[i] *= i / double(atk);
             int rel = int((1 - tex * tex) * dry.size());
             for (int i = 0; i < rel; ++i) dry[dry.size()-1 - i] *= (rel - i) / double(rel);

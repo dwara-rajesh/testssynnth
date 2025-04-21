@@ -131,7 +131,7 @@ def chord_updater():
         seq = chord.copy()
         if mode=='rev_arp': seq.reverse()
         elif mode=='random': random.shuffle(seq)
-        offs = int(remap(brightness,0,1,-2,2))*12
+        offs = int(remap(brightness,0,1,-4,4))*12
         seq = [n+offs for n in seq] + [seq[0]+offs]
         with seq_lock:
             global_seq = seq
@@ -143,7 +143,7 @@ def waveform_updater():
     while running:
         with feat_lock:
             texture = global_texture
-        wf = 'sine' if texture<0.06 else ('triangle' if texture<0.12 else 'square')
+        wf = 'sine' if texture<0.05 else ('triangle' if texture<0.1 else 'square')
         with wav_lock:
             global_waveform = wf
         time.sleep(sub)

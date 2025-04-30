@@ -1,5 +1,6 @@
-// main_nocv_fixed.cpp — BBB Real-Time YUYV Capture + Audio
-// Fixed: dynamic resolution, dual buffers, error checks, RT scheduling, graceful shutdown
+// main_nocv_fixed.cpp — BBB Real-Time YUYV Capture + Audio with Debug Prints
+// Features: dynamic resolution, dual buffers, error checks, RT scheduling,
+// graceful shutdown, debug output for brightness & audio phase
 
 #include <linux/videodev2.h>
 #include <fcntl.h>
@@ -24,13 +25,16 @@
 typedef unsigned char uchar;
 struct Shared {
     std::atomic<bool> running{true};
-    std::atomic<int> seq{0};
+    std::atomic<int> seq{0}; // frame count
 } shared;
+
+// Debug metrics
+static std::atomic<float> avgBrightness{0.0f};
 
 // Audio data
 struct PaData {
     std::vector<float> sine;
-    int phase = 0;
+    std::atomic<int> phase{0};
 };
 static PaData paData;
 static PaStream* paStream = nullptr;
@@ -75,6 +79,7 @@ void initCamera(const char* dev = "/dev/video0") {
 
     camWidth = fmt.fmt.pix.width;
     camHeight = fmt.fmt.pix.height;
+    std::cout << "[Camera] Resolution set: " << camWidth << "x" << camHeight << "\n";
 
     v4l2_requestbuffers req{};
     req.count = 2;
@@ -117,7 +122,7 @@ void closeCamera() {
     camFd = -1;
 }
 
-// Thread: grab & stub-process frames
+// Thread: grab & debug-process frames
 void videoThread() {
     while (shared.running) {
         v4l2_buffer buf{};
@@ -128,17 +133,24 @@ void videoThread() {
             perror("VIDIOC_DQBUF");
             break;
         }
-        // Stub: process YUYV at camWidth x camHeight
-        // e.g., extract luma, feature detection, etc.
+        // Compute average brightness from Y channel
+        uchar* data = static_cast<uchar*>(camBufs[buf.index].start);
+        long sum = 0;
+        int pixels = camWidth * camHeight;
+        for (int i = 0; i < pixels*2; i += 2)
+            sum += data[i];  // Y at even bytes
+        float avg = sum / float(pixels);
+        avgBrightness = avg;
+        int fnum = ++shared.seq;
+        std::cout << "[Video] Frame " << fnum
+                  << " brightness=" << avg << "\n";
 
         if (ioctl(camFd, VIDIOC_QBUF, &buf) < 0)
             perror("VIDIOC_QBUF");
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }
 
-// PortAudio callback: play sine
+// PortAudio callback: play sine & debug phase
 static int paCallback(const void*, void* output,
                       unsigned long frames,
                       const PaStreamCallbackTimeInfo*,
@@ -158,46 +170,43 @@ void initAudio() {
     err = Pa_Initialize();
     if (err != paNoError) perrorExit(Pa_GetErrorText(err));
 
-    // prepare sine table
     int N = 200;
     paData.sine.resize(N);
     for (int i = 0; i < N; ++i)
         paData.sine[i] = std::sin((2*M_PI*i)/N);
-    paData.phase = 0;
 
     err = Pa_OpenDefaultStream(&paStream,
         0, 2, paFloat32, 44100, 64, paCallback, nullptr);
     if (err != paNoError) perrorExit(Pa_GetErrorText(err));
-
-    // Consider setting RT priority using pthread_setschedparam on internal threads
 
     err = Pa_StartStream(paStream);
     if (err != paNoError) perrorExit(Pa_GetErrorText(err));
 }
 
 int main() {
-    // Lock memory to avoid paging
     if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0)
         perror("mlockall");
 
-    // Signal handler
     signal(SIGINT, handleSignal);
     signal(SIGTERM, handleSignal);
 
     initCamera();
     initAudio();
 
-    // Launch video thread with RT priority
     std::thread vt(videoThread);
     struct sched_param sp;
     sp.sched_priority = 50;
     pthread_setschedparam(vt.native_handle(), SCHED_FIFO, &sp);
 
-    // Wait until interrupted
-    while (shared.running)
+    // Debug loop: print last metrics
+    while (shared.running) {
+        std::cout << "[Debug] Last brightness="
+                  << avgBrightness.load()
+                  << ", audio phase=" << paData.phase.load()
+                  << "\n";
         std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
 
-    // Clean up
     vt.join();
     Pa_StopStream(paStream);
     Pa_CloseStream(paStream);
@@ -205,3 +214,4 @@ int main() {
     closeCamera();
     return 0;
 }
+

@@ -1,8 +1,6 @@
-// Makefile for main_nocv_fixed.cpp
-# Makefile
 
 CXX      := g++
-CXXFLAGS := -std=c++17 -O2 -Wall
+CXXFLAGS := -std=c++17 -O2 -Wall -pthread
 LDFLAGS  := -lportaudio -lv4l2 -lpthread -lm
 TARGET   := main_nocv
 SRCS     := main_nocv_fixed.cpp

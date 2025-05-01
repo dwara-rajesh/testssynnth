@@ -50,6 +50,8 @@ struct Shared {
     std::atomic<float> brightness{0}, warmth{0}, texture{0};
     std::atomic<int> objCount{0};
     std::atomic<int> waveform{0};
+    std::vector<float> reverbTail;        // delay buffer for reverb
+    std::atomic<float> reverb{0.5f};      // reverb mix 0.0-1.0
 } shared;
 
 std::mt19937 rng(std::random_device{}());
@@ -220,24 +222,33 @@ void playerThread() {
 }
 
 // PortAudio callback: mix into 16-bit stereo
+// PortAudio callback: mix into 16-bit stereo with simple reverb
 static int paCallback(const void*, void* out, unsigned long frames,
                       const PaStreamCallbackTimeInfo*, PaStreamCallbackFlags, void*) {
     auto* buf = static_cast<int16_t*>(out);
-    unsigned long totalSamples = frames*2;
-    std::fill(buf, buf+totalSamples, 0);
+    unsigned long totalSamples = frames * 2;
+    std::fill(buf, buf + totalSamples, 0);
     std::lock_guard<std::mutex> lk(shared.seqMutex);
-    unsigned long i=0;
-    while(i<frames && !shared.audioQueue.empty()){
+    unsigned long i = 0;
+    while (i < frames && !shared.audioQueue.empty()) {
         auto &chunk = shared.audioQueue.front();
-        unsigned long n = std::min<unsigned long>(chunk.size(), frames-i);
-        for(unsigned long j=0;j<n;++j){
-            int16_t s = static_cast<int16_t>(std::clamp(chunk[j],-1.0f,1.0f)*32767);
+        unsigned long n = std::min<unsigned long>(chunk.size(), frames - i);
+        for (unsigned long j = 0; j < n; ++j) {
+            int16_t s = static_cast<int16_t>(std::clamp(chunk[j], -1.0f, 1.0f) * 32767);
+            // Dry signal
             buf[2*(i+j)]     += s;
-            buf[2*(i+j)+1]   += s;
+            buf[2*(i+j) + 1] += s;
+            // Simple feedback reverb (delay line)
+            auto tailPos = (i + j) % shared.reverbTail.size();
+            int16_t rt = static_cast<int16_t>(shared.reverbTail[tailPos] * 32767 * shared.reverb);
+            buf[2*(i+j)]     += rt;
+            buf[2*(i+j) + 1] += rt;
+            // Update tail buffer
+            shared.reverbTail[tailPos] = chunk[j];
         }
-        if(n<chunk.size()) chunk.erase(chunk.begin(),chunk.begin()+n);
+        if (n < chunk.size()) chunk.erase(chunk.begin(), chunk.begin() + n);
         else shared.audioQueue.pop_front();
-        i+=n;
+        i += n;
     }
     return paContinue;
 }
@@ -251,6 +262,9 @@ int main() {
         {67,71,74,79,83,86}
     };
     shared.seq = shared.CHORDS[0];
+    // Initialize reverb tail buffer to avoid division by zero
+    shared.reverbTail.assign(DLY, 0.0f);
+    std::cout << "[Init] Reverb tail size: " << shared.reverbTail.size() << std::endl;
     shared.running = true;
     initFreqLUT();
     if(mlockall(MCL_CURRENT|MCL_FUTURE)<0) perror("mlockall");

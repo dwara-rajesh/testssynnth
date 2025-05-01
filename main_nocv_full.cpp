@@ -50,8 +50,9 @@ struct Shared {
     std::atomic<float> brightness{0}, warmth{0}, texture{0};
     std::atomic<int> objCount{0};
     std::atomic<int> waveform{0};
-    std::vector<float> reverbTail;        // delay buffer for reverb
-    std::atomic<float> reverb{0.5f};      // reverb mix 0.0-1.0
+    std::vector<float> reverbTail;
+    std::atomic<float> reverb{0.5f};
+    std::atomic<int> mode{1};  // 0=rev_arp, 1=random, 2=forward_arp
 } shared;
 
 std::mt19937 rng(std::random_device{}());
@@ -176,15 +177,24 @@ void featureThread() {
 // Waveform generation
 static std::vector<float> generateWave(double freq,int len,double amp,int kind) {
     std::vector<float> out(len);
+    const int fadeLen = std::min(len/10, 50);  // fade over 10% or max 50 samples
     for(int i=0;i<len;i++){
         double phase = 2*M_PI*freq*(i/ double(FS));
         double v=0;
         if(kind==0) v=std::sin(phase);
-        else if(kind==1) { double x=2*((i/ double(FS))*freq - std::floor((i/ double(FS))*freq +0.5)); v=1-2*std::abs(x);}        
-        else if(kind==2) v=(std::sin(phase)>=0?1:-1);
-        out[i]=amp*v;
+        else if(kind==1) {
+            double t = i/ double(FS);
+            double x = 2*(fmod(t*freq,1.0) - 0.5);
+            v = 1 - 2*std::abs(x);
+        } else if(kind==2) v = (std::sin(phase)>=0?1:-1);
+        out[i] = float(amp * v);
     }
-    if(!out.empty()) out[0]=0;
+    // apply linear fade in/out
+    for(int i=0;i<fadeLen && i<len;i++){
+        float gain = float(i)/fadeLen;
+        out[i] *= gain;
+        out[len-1-i] *= gain;
+    }
     return out;
 }
 

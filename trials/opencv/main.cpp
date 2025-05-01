@@ -17,7 +17,7 @@ using namespace std::chrono;
 
 // Audio settings
 static constexpr int FS                 = 48000;   // hardware native
-static constexpr int FRAMES_PER_BUFFER  = 256;     // ~10.7 ms latency
+static constexpr int FRAMES_PER_BUFFER  = 512;     // ~10.7 ms latency
 static constexpr double DURATION       = 4.0;     // chord length
 static constexpr double SUB            = DURATION/6.0;
 static constexpr int SUB_FRAMES        = int(SUB * FS);

@@ -1,0 +1,253 @@
+// Full Vision-Driven Chord Synth with ALSA (44100Hz, 1024-frame periods, stereo)
+// Tunables: ±2‑octave transpose, more sine bias, random sine pops, tighter reverb range
+#define __struct_timespec_defined  // avoid struct timespec redefinition
+
+#include <alsa/asoundlib.h>
+#include <opencv2/opencv.hpp>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <deque>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <vector>
+
+using namespace cv;
+using namespace std::chrono;
+using namespace std::chrono_literals;
+
+// Tunables <<< TUNABLE >>>
+static constexpr int    FS                = 44100;
+static constexpr unsigned int CHAN       = 2;                          // stereo output
+static constexpr snd_pcm_format_t FMT    = SND_PCM_FORMAT_S16_LE;
+static constexpr unsigned int PERIOD     = 1024;
+
+static constexpr double DURATION          = 4.0;          // seconds per bar
+static constexpr double SUBDIV            = DURATION / 6.0; // 0.667s per note
+static constexpr int    SUB_FRAMES        = int(SUBDIV * FS);
+static constexpr int    DLY_FRAMES        = int(0.5   * FS); // 0.5s delay
+
+// Enable logging of vision/music variables for feedback observation
+static constexpr bool ENABLE_FEEDBACK_LOG = true;
+
+// Chord definitions
+static const std::vector<std::vector<int>> CHORDS = {
+    {69,75,79,81,87,91}, {62,65,69,72,74,81}, {63,69,73,75,81,85},
+    {65,72,75,77,84,87}, {67,74,77,79,86,89}, {60,64,67,72,72,79},
+    {62,66,69,74,74,81}, {64,68,71,75,76,83}, {65,67,72,77,77,84},
+    {67,71,74,79,79,86}
+};
+static const std::vector<std::string> MODES = {"reverse","shuffle","forward"};
+
+// Utility: linear remap
+inline double remap(double v,double a,double b,double c,double d){
+    return (v-a)/(b-a)*(d-c)+c;
+}
+
+// Shared vision state
+std::atomic<bool> running{true};
+std::atomic<float> globalBrightness{0.0f};
+std::atomic<float> globalWarmth{0.0f};
+std::atomic<float> globalTexture{0.0f};
+std::atomic<int>   globalObjCount{0};
+
+std::mutex seqMutex;
+std::vector<int> globalSeq;
+
+// Frequency LUT
+static double freqLUT[128];
+static void initLUT(){
+    for(int i=0;i<128;++i)
+        freqLUT[i] = 440.0 * std::pow(2.0,(i-69)/12.0);
+}
+
+// Phase-increment oscillator
+struct Osc {
+    double phase=0, step=0;
+    void init(double freq){ phase=0; step=freq/FS; }
+    double sine()    { double v=sin(2*M_PI*phase); phase+=step; if(phase>=1.0) phase-=floor(phase); return v; }
+    double triangle(){ double v=(phase<0.5?4*phase-1:3-4*phase); phase+=step; if(phase>=1.0) phase-=floor(phase); return v; }
+    double square()  { double v=(phase<0.5?1:-1); phase+=step; if(phase>=1.0) phase-=floor(phase); return v; }
+};
+
+// Vision thread: brightness, warmth, texture, object count
+void visionThread(){
+    VideoCapture cap(0);
+    cap.set(CAP_PROP_FRAME_WIDTH,160);
+    cap.set(CAP_PROP_FRAME_HEIGHT,120);
+    Mat frame, small, gray, edges;
+    while(running){
+        if(!cap.read(frame)){
+            std::this_thread::sleep_for(50ms);
+            continue;
+        }
+        cv::resize(frame, small, Size(160,120));
+        cvtColor(small, gray, COLOR_BGR2GRAY);
+        globalBrightness = mean(gray)[0]/255.0f;
+
+        // compute & clamp warmth
+        std::vector<Mat> bgr(3);
+        split(small,bgr);
+        float r = mean(bgr[2])[0], g = mean(bgr[1])[0], b = mean(bgr[0])[0];
+        float w = float(remap((2*r)/(2*(g+b)+1), 0.45, 0.55, 0.0, CHORDS.size()-1));
+        w = std::clamp(w, 0.0f, float(CHORDS.size()-1));
+        globalWarmth = w;
+
+        Canny(gray, edges, 50, 150);
+        globalTexture = float(countNonZero(edges))/edges.total();
+
+        Mat thr, clean;
+        adaptiveThreshold(gray, thr, 255,
+                          ADAPTIVE_THRESH_GAUSSIAN_C,
+                          THRESH_BINARY_INV, 11, 2);
+        morphologyEx(thr, clean, MORPH_OPEN,
+                     getStructuringElement(MORPH_RECT,Size(3,3)),
+                     Point(-1,-1), 2);
+        std::vector<std::vector<Point>> cont;
+        findContours(clean, cont, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+        globalObjCount = (int)cont.size();
+
+        std::this_thread::sleep_for(50ms);
+    }
+}
+
+// Audio+Music thread: full chord logic, arpeggio, reverb, ALSA I/O in stereo
+void audioThread(){
+    // 1) ALSA init, keep plughw:1,0
+    snd_pcm_t *pcm;
+    if(snd_pcm_open(&pcm,"plughw:1,0",SND_PCM_STREAM_PLAYBACK,0)<0){
+        std::cerr<<"ALSA open error"<<std::endl;
+        return;
+    }
+    snd_pcm_hw_params_t *hw;
+    snd_pcm_hw_params_malloc(&hw);
+    snd_pcm_hw_params_any(pcm,hw);
+    snd_pcm_hw_params_set_access(pcm,hw,SND_PCM_ACCESS_RW_INTERLEAVED);
+    snd_pcm_hw_params_set_format(pcm,hw,FMT);
+    snd_pcm_hw_params_set_channels(pcm,hw,CHAN);
+    unsigned int rate = FS;
+    snd_pcm_hw_params_set_rate_near(pcm,hw,&rate,nullptr);
+    snd_pcm_uframes_t per = PERIOD;
+    int dir = 0;
+    snd_pcm_hw_params_set_period_size_near(pcm,hw,&per,&dir);
+    snd_pcm_hw_params(pcm,hw);
+    snd_pcm_hw_params_free(hw);
+    snd_pcm_prepare(pcm);
+
+    // 2) State & buffers
+    Osc osc;
+    std::vector<double> delayLine(DLY_FRAMES,0.0);
+    int delayPos = 0;
+    std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> modeDist(0,2);
+
+    { // init first chord & osc
+        std::lock_guard<std::mutex> lk(seqMutex);
+        globalSeq = CHORDS[0];
+        osc.init(freqLUT[ globalSeq.front() ]);
+    }
+
+    unsigned long long frameCount = 0;
+    const unsigned long long barFrames = (unsigned long long)(DURATION * FS);
+    unsigned long long subCount = 0;
+    std::vector<int16_t> buffer(PERIOD * CHAN);
+
+    while(running){
+        // every bar: pick new chord & mode
+        if(frameCount % barFrames == 0){
+            float warmth = globalWarmth.load();
+            size_t chordIdx = std::clamp(
+                size_t(warmth * CHORDS.size()),
+                size_t(0), CHORDS.size()-1
+            );
+            auto seq = CHORDS[chordIdx];
+
+            // choose mode round-robin
+            static int mode = 0;
+            mode = (mode + 1) % 3;
+            if(mode == 0)            std::reverse(seq.begin(), seq.end());
+            else if(mode == 1)       std::shuffle(seq.begin(), seq.end(), rng);
+            else /* forward */       std::rotate(seq.begin(), seq.begin()+2, seq.end());
+
+            // ±2‑octave transpose
+            float bright = globalBrightness.load();
+            int offs = int(std::floor(remap(bright,0.0,1.0,-2.0,2.0))) * 12;
+            for(auto &n: seq) n += offs;
+            seq.push_back(seq.front());
+
+            { // commit & init osc on first note
+                std::lock_guard<std::mutex> lk(seqMutex);
+                globalSeq = std::move(seq);
+                osc.init(freqLUT[ globalSeq.front() ]);
+            }
+            subCount = 0;
+        }
+
+        // next sub-note?
+        if(subCount >= SUB_FRAMES){
+            std::lock_guard<std::mutex> lk(seqMutex);
+            static size_t arpIdx = 0;
+            int note = globalSeq[ arpIdx++ % globalSeq.size() ];
+            osc.init(freqLUT[note]);
+            subCount = 0;
+        }
+
+        // narrower reverb mapping: 0.7→0.3
+        float oc   = globalObjCount.load();
+        float sens = std::min(oc/25.0f, 1.0f);
+        float revMix = float(remap(sens,0.0,1.0,0.7,0.3));
+
+        // feedback log
+        if(ENABLE_FEEDBACK_LOG){
+            std::cout << "[FEEDBACK_LOG] brightness="<<globalBrightness.load()
+                      <<" warmth="<<globalWarmth.load()
+                      <<" texture="<<globalTexture.load()
+                      <<" objCount="<<globalObjCount.load()
+                      <<" revMix="<<revMix<<std::endl;
+        }
+
+        float tx = globalTexture.load();
+        auto wave = [&](){
+            // bias sine window to 20%
+            std::string wf = (tx < 0.2f   ? "sine"
+                              : tx < 0.4f   ? "triangle"
+                                            : "square");
+            // random sine “pop”
+            if((rng() & 7) == 0) wf = "sine";
+            if(wf=="sine")      return osc.sine();
+            else if(wf=="triangle") return osc.triangle();
+            else return osc.square();
+        };
+
+        // fill buffer
+        for(unsigned i=0;i<PERIOD;++i, ++frameCount, ++subCount){
+            double dry = wave();
+            double fb  = delayLine[delayPos];
+            double out = dry*(1.0-revMix) + fb*revMix;
+            delayLine[delayPos] = dry + fb*revMix;
+            if(++delayPos >= DLY_FRAMES) delayPos = 0;
+            int16_t s = int16_t(std::clamp(out, -1.0, 1.0)*32767);
+            buffer[2*i]   = s;
+            buffer[2*i+1] = s;
+        }
+
+        // write to ALSA
+        auto err = snd_pcm_writei(pcm, buffer.data(), PERIOD);
+        if(err == -EPIPE) snd_pcm_prepare(pcm);
+    }
+
+    snd_pcm_drain(pcm);
+    snd_pcm_close(pcm);
+}
+
+int main(){
+    initLUT();
+    std::thread v(visionThread), a(audioThread);
+    std::cout<<"Running... press Enter to quit."<<std::endl;
+    std::cin.get();
+    running = false;
+    v.join(); a.join();
+    return 0;
+}

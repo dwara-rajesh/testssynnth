@@ -7,3 +7,4 @@ Login as root
 Enter "./full_synth" to run the application and enjoy SynesthesiARP
 OR
 Enter "./run_benchmark.sh" to log the outputs for performance analysis
+

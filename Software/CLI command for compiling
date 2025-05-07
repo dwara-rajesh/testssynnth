@@ -1,0 +1,3 @@
+g++ -std=c++17 -O2 -Wall -pthread \
+  $(pkg-config --cflags opencv4 alsa) -o full_synth main.cpp \
+  $(pkg-config --libs opencv4 alsa) -lm

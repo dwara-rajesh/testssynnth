@@ -1,7 +1,11 @@
 Link to youtube Video: https://www.youtube.com/watch?v=1fKRt8jVq0s
 
 
-- Flash sdcardfinal.img into BeagleBone Black board
+-/Hardware has all configuration files & disk image file
+-/Software has source code, binary file, and make command
+-/Test has test benchmark shell script for [erformance metric analysis
+
+- Flash sdcardfinal.img into BeagleBone Black board from /Hardware folder
 - Power BeagleBone Black board
 - Login as root
 - Enter "./full_synth" to run the application and enjoy SynesthesiARP

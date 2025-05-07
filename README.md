@@ -1,6 +1,6 @@
 Link to youtube Video: https://www.youtube.com/watch?v=1fKRt8jVq0s
 
-Navigating
+Navigating Repository
 - /Hardware has all configuration files & disk image file
 - /Software has source code, binary file, and make command
 - /Test has test benchmark shell script for [erformance metric analysis

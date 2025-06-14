@@ -1,4 +1,3 @@
-Link to youtube Video: 
 # SynesthesiARP
 
 ![GitHub repo size](https://img.shields.io/github/repo-size/venk-meg/testssynnth)

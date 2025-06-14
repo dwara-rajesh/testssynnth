@@ -22,8 +22,6 @@
 * [Getting Started](#getting-started)
 * [Performance](#performance)
 * [Future Work](#future-work)
-* [Contributing](#contributing)
-* [License](#license)
 * [Acknowledgments](#acknowledgments)
 
 ---
